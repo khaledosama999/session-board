@@ -9,6 +9,8 @@ const POLL_MS = 3000
 const HIDDEN_KEY = 'hidden'
 const SESSION_SERVER = 'ccd_session_mgmt'
 const CATALOG_LIMIT = 100
+// The most a Select may hold; a longer list stops the whole pane drawing.
+const MAX_PICKER_OPTIONS = 64
 const EMPTY: Board = { rows: [], error: '' }
 const board = atom({ plugin: 'session-board', key: 'board' } as const, EMPTY, {
   shape: 'board-2',
@@ -292,7 +294,9 @@ export const register: Register = on => {
         {picking && Select && addable.length > 0 ? (
           <Select
             key="pick-session"
-            options={addable.map(one => ({ value: one.id, label: one.title }))}
+            options={addable
+              .slice(0, MAX_PICKER_OPTIONS)
+              .map(one => ({ value: one.id, label: one.title }))}
             onSelect={id => void pick(id)}
           />
         ) : null}

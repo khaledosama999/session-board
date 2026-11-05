@@ -255,6 +255,26 @@ test('a removed session with no running process gets no card', async ($, on) => 
   await ui.unmount()
 })
 
+test('the picker still draws with more sessions than a Select can hold', async ($, on) => {
+  const sessions = Array.from({ length: 100 }, (_, index) => ({
+    sessionId: `local_${index}`,
+    title: `Session ${index}`,
+  }))
+  world(on, { sessions })
+  await $.session.start(start)
+  const ui = await $.ui.mount(PANE)
+
+  await ui.press({ key: 'add-session' })
+  await ui.advance(0)
+
+  const picker = await ui.find({ key: 'pick-session' })
+  expect(picker?.props.options).toHaveLength(64)
+  expect((await ui.find({ type: 'Text', text: /live/ }))?.text).toBe(
+    '1 live · 0 waiting on you · 1 working',
+  )
+  await ui.unmount()
+})
+
 test('the picker says so when nothing is left to add', async ($, on) => {
   world(on)
   await $.session.start(start)
