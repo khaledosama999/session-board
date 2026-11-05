@@ -17,6 +17,7 @@ The pane opens when a session starts. Type `/sessions` to reopen it.
 
 - macOS with `python3` available
 - The Claude desktop app, for opening sessions and sending messages
+- A recent Claude Code. Tested on 2.1.317. Version 2.1.121 fails with `unknown option '--marketplace'`, and the exact minimum version is not known. Run `claude --version` to check yours.
 
 ## Install
 
