@@ -16,16 +16,13 @@ export type CardProps = {
 type CardState = {
   frame: number
   isHover: boolean
-  isDragging: boolean
   downAt: { x: number; y: number } | null
 }
 
 const FRAME_MS = 150
-// Rows the pointer must travel before a press becomes a drag, not a click.
-const DRAG_ROWS = 2
 // Columns at the end of the title row that belong to the X, not the card.
 const CLOSE_COLUMNS = 4
-const INITIAL: CardState = { frame: 0, isHover: false, isDragging: false, downAt: null }
+const INITIAL: CardState = { frame: 0, isHover: false, downAt: null }
 const GLYPHS: Record<Motion, string[]> = {
   spin: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
   pulse: ['●', '●', '◉', '◎', '○', '◎', '◉', '●'],
@@ -34,17 +31,11 @@ const GLYPHS: Record<Motion, string[]> = {
 }
 // The timer outlives each draw, so it reads the latest motion from here.
 const motions = new Map<string, Motion>()
-const reportedRows = new Map<string, number>()
 
 const Card: ClientModule<CardProps, CardState> = (props, surface) => {
   const { Box, Button, Text } = surface.elements
   const { id } = props
   motions.set(id, props.motion)
-
-  if (surface.rows > 0 && reportedRows.get(id) !== surface.rows) {
-    reportedRows.set(id, surface.rows)
-    surface.post({ type: 'size', id, rows: surface.rows })
-  }
 
   if (surface.state === undefined) {
     surface.setState(INITIAL)
@@ -60,29 +51,19 @@ const Card: ClientModule<CardProps, CardState> = (props, surface) => {
       if (event.type === 'down' && event.button === 'left') {
         surface.setState({ ...now, downAt: { x: event.x, y: event.y } })
       }
-      if (event.type === 'move' && now.downAt) {
-        const dy = event.y - now.downAt.y
-        if (!now.isDragging && Math.abs(dy) >= DRAG_ROWS) {
-          surface.setState({ ...now, isDragging: true })
-          surface.post({ type: 'drag', id, dy })
-        } else if (now.isDragging) {
-          surface.post({ type: 'drag', id, dy })
-        }
-      }
       if (event.type === 'up' && event.button === 'left' && now.downAt) {
-        const dy = event.y - now.downAt.y
-        const isSamePlace = Math.abs(event.x - now.downAt.x) <= 2 && Math.abs(dy) <= 1
+        const isSamePlace =
+          Math.abs(event.x - now.downAt.x) <= 2 && Math.abs(event.y - now.downAt.y) <= 1
         const isOnClose = event.y === 0 && event.x >= surface.columns - CLOSE_COLUMNS
-        surface.setState({ ...now, downAt: null, isDragging: false })
-        if (now.isDragging) surface.post({ type: 'drop', id, dy })
-        else if (isSamePlace && !isOnClose) surface.post({ type: 'toggle', id })
+        surface.setState({ ...now, downAt: null })
+        if (isSamePlace && !isOnClose) surface.post({ type: 'toggle', id })
       }
     })
   }
 
   const state = surface.state ?? INITIAL
   const glyphs = GLYPHS[props.motion]
-  const glyph = state.isDragging ? '↕' : glyphs[state.frame % glyphs.length]
+  const glyph = glyphs[state.frame % glyphs.length]
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -90,7 +71,7 @@ const Card: ClientModule<CardProps, CardState> = (props, surface) => {
         <Text>
           {props.isOpen ? '▾ ' : '▸ '}
           <Text color={props.color}>{glyph} </Text>
-          <Text bold dimColor={props.isDim || state.isDragging} underline={state.isHover}>
+          <Text bold dimColor={props.isDim} underline={state.isHover}>
             {props.title}
           </Text>
         </Text>
@@ -101,7 +82,7 @@ const Card: ClientModule<CardProps, CardState> = (props, surface) => {
           onPress={() => surface.post({ type: 'hide', id })}
         />
       </Box>
-      <Text color={props.color}>{state.isDragging ? 'Drop to move' : props.status}</Text>
+      <Text color={props.color}>{props.status}</Text>
       {props.isOpen
         ? props.details.map(detail => (
             <Text>
