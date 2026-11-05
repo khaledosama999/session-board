@@ -1,0 +1,5 @@
+{
+  "name": "session-board",
+  "owner": { "name": "khaledosama999" },
+  "plugins": [{ "name": "session-board", "source": "./" }]
+}
