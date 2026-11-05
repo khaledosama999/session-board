@@ -1,13 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Board, SendStatus, SessionRow, SessionState } from '../types'
+import type { Board, Catalog, SendStatus, SessionRow, SessionState } from '../types'
 import type { CardProps, Motion } from './card'
 
 const PANE = 'session-board'
 const POLL_MS = 3000
 const HIDDEN_KEY = 'hidden'
 const SESSION_SERVER = 'ccd_session_mgmt'
+const CATALOG_LIMIT = 100
 const EMPTY: Board = { rows: [], error: '' }
 const board = atom({ plugin: 'session-board', key: 'board' } as const, EMPTY, {
   shape: 'board-2',
@@ -29,6 +30,10 @@ const hidden = atom(
 )
 const isPicking = atom({ plugin: 'session-board', key: 'isPicking' } as const, false, {
   shape: 'picking-1',
+})
+const NO_CATALOG: Catalog = { sessions: [], error: '', isLoaded: false }
+const catalog = atom({ plugin: 'session-board', key: 'catalog' } as const, NO_CATALOG, {
+  shape: 'catalog-2',
 })
 
 const LABEL: Record<SessionState, string> = {
@@ -133,6 +138,27 @@ async function setHidden($: EngineInterface, ids: string[]): Promise<void> {
   await $.store.set(HIDDEN_KEY, ids)
 }
 
+async function loadCatalog($: EngineInterface): Promise<void> {
+  let next: Catalog
+  try {
+    const result = await $.mcp.call(SESSION_SERVER, 'list_sessions', { limit: CATALOG_LIMIT })
+    const text = result.content.map(block => block.text ?? '').join('')
+    if (result.isError) throw new Error(text)
+    const listed = JSON.parse(text) as { sessionId: string; title?: string }[]
+    next = {
+      sessions: listed.map(one => ({ id: one.sessionId, title: one.title || 'Untitled' })),
+      error: '',
+      isLoaded: true,
+    }
+  } catch (error) {
+    next = { sessions: [], error: String(error).slice(0, 200), isLoaded: true }
+  }
+  await update($, catalog, () => next)
+}
+
+const openInApp = ($: EngineInterface, id: string) =>
+  $.process.run(['open', `claude://claude.ai/epitaxy/${id}`])
+
 /** Delivers `text` to a session; a failure keeps the text in the field. */
 async function sendMessage($: EngineInterface, row: SessionRow, text: string): Promise<void> {
   if (!text.trim()) return
@@ -223,27 +249,51 @@ export const register: Register = on => {
     const picking = await read($, isPicking)
     const selfId = await $.session.id()
     const shown = rows.filter(row => !hiddenIds.includes(idOf(row)))
-    const removed = rows.filter(row => hiddenIds.includes(idOf(row)))
-    const jump = (row: SessionRow) =>
-      void $.process.run(['open', `claude://claude.ai/epitaxy/${row.hostId}`])
-    const addBack = async (id: string) => {
-      await setHidden($, hiddenIds.filter(one => one !== id))
+    const known = await read($, catalog)
+    const onBoard = new Set(shown.map(idOf))
+    const removed = rows
+      .filter(row => hiddenIds.includes(idOf(row)))
+      .map(row => ({ id: idOf(row), title: row.title }))
+    const removedIds = new Set(removed.map(one => one.id))
+    const addable = [
+      ...removed,
+      ...known.sessions.filter(one => !onBoard.has(one.id) && !removedIds.has(one.id)),
+    ]
+    const liveIds = new Set(rows.map(idOf))
+    const jump = (row: SessionRow) => void openInApp($, row.hostId)
+    const togglePicker = async () => {
+      if (!picking) {
+        await update($, catalog, () => NO_CATALOG)
+        void loadCatalog($)
+      }
+      await update($, isPicking, () => !picking)
+    }
+    // A running session just comes back; a stopped one has to start first, and
+    // its card appears once the snapshot sees it live.
+    const pick = async (id: string) => {
+      if (hiddenIds.includes(id)) await setHidden($, hiddenIds.filter(one => one !== id))
+      if (!liveIds.has(id)) await openInApp($, id)
       await update($, isPicking, () => false)
     }
 
     return (
       <Box flexDirection="column" gap={1}>
         <Text dimColor>{summarize(shown)}</Text>
-        {removed.length > 0 && Select ? (
-          <Button key="add-session" onPress={() => void update($, isPicking, () => !picking)}>
+        {Select ? (
+          <Button key="add-session" onPress={() => void togglePicker()}>
             {picking ? 'Cancel' : '+ Add session'}
           </Button>
         ) : null}
-        {picking && removed.length > 0 && Select ? (
+        {picking && known.error ? <Text color="error">{known.error}</Text> : null}
+        {picking && !known.isLoaded ? <Text dimColor>Loading sessions…</Text> : null}
+        {picking && known.isLoaded && !known.error && addable.length === 0 ? (
+          <Text dimColor>No other sessions to add</Text>
+        ) : null}
+        {picking && Select && addable.length > 0 ? (
           <Select
             key="pick-session"
-            options={removed.map(row => ({ value: idOf(row), label: row.title }))}
-            onSelect={id => void addBack(id)}
+            options={addable.map(one => ({ value: one.id, label: one.title }))}
+            onSelect={id => void pick(id)}
           />
         ) : null}
         {shown.map(row => {

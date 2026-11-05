@@ -51,6 +51,7 @@ type World = {
   saved?: Record<string, unknown>
   stored?: Record<string, unknown>
   sent?: unknown[]
+  sessions?: object[]
   sendReply?: ReturnType<typeof reply>
 }
 
@@ -73,6 +74,9 @@ function world(on: On, options: World = {}) {
     return ran(JSON.stringify({ rows }))
   })
   on('mcp.call', (_, e) => {
+    if (JSON.stringify(e).includes('list_sessions')) {
+      return reply(JSON.stringify(options.sessions ?? []))
+    }
     options.sent?.push(e)
 
     return options.sendReply ?? reply('Done (delivery: delivered; message_id: m1)')
@@ -182,20 +186,31 @@ test('X removes a session, stays removed, and Show all restores it', async ($, o
   await ui.unmount()
 })
 
-test('Add session is hidden until a session has been removed', async ($, on) => {
-  world(on, { rows: [row({}), two] })
+const stopped = { sessionId: 'local_stopped', title: 'Stopped one' }
+
+test('the picker lists stopped and removed sessions, not ones on the board', async ($, on) => {
+  world(on, {
+    rows: [row({}), two],
+    stored: { hidden: ['local_two'] },
+    sessions: [{ sessionId: 'local_one', title: 'One' }, stopped],
+  })
   await $.session.start(start)
   const ui = await $.ui.mount(PANE)
 
-  expect(await ui.find({ key: 'add-session' })).toBeUndefined()
-  await ui.press({ key: 'hide-local_one', ...CARD })
-  expect(await ui.find({ key: 'add-session' })).toBeDefined()
+  await ui.press({ key: 'add-session' })
+  await ui.advance(0)
+  const drawn = JSON.stringify(await ui.drawn())
+
+  expect(drawn).toContain('Stopped one')
+  expect(drawn).toContain('local_two')
+  expect(drawn).not.toContain('"value":"local_one"')
   await ui.unmount()
 })
 
-test('Add session brings one removed session back and closes', async ($, on) => {
+test('picking a removed running session brings it back without opening it', async ($, on) => {
   const saved: Record<string, unknown> = {}
-  world(on, { rows: [row({}), two], saved, stored: { hidden: ['local_one', 'local_two'] } })
+  const argvs: unknown[] = []
+  world(on, { rows: [row({}), two], saved, argvs, stored: { hidden: ['local_one', 'local_two'] } })
   await $.session.start(start)
   const ui = await $.ui.mount(PANE)
 
@@ -207,10 +222,29 @@ test('Add session brings one removed session back and closes', async ($, on) => 
     '1 live · 0 waiting on you · 1 working',
   )
   expect(await ui.find({ key: 'pick-session' })).toBeUndefined()
+  expect(JSON.stringify(argvs)).not.toContain('claude://')
   await ui.unmount()
 })
 
-test('a removed session with no running process gets no card and no pick', async ($, on) => {
+test('picking a stopped session opens it and adds no card yet', async ($, on) => {
+  const argvs: unknown[] = []
+  world(on, { argvs, sessions: [stopped] })
+  await $.session.start(start)
+  const ui = await $.ui.mount(PANE)
+
+  await ui.press({ key: 'add-session' })
+  await ui.advance(0)
+  await ui.select({ key: 'pick-session', value: 'local_stopped' })
+
+  expect(argvs).toContainEqual(['open', 'claude://claude.ai/epitaxy/local_stopped'])
+  expect((await ui.find({ type: 'Text', text: /live/ }))?.text).toBe(
+    '1 live · 0 waiting on you · 1 working',
+  )
+  expect(JSON.stringify(await ui.drawn())).not.toContain('card-local_stopped')
+  await ui.unmount()
+})
+
+test('a removed session with no running process gets no card', async ($, on) => {
   world(on, { rows: [row({})], stored: { hidden: ['local_gone'] } })
   await $.session.start(start)
   const ui = await $.ui.mount(PANE)
@@ -218,7 +252,39 @@ test('a removed session with no running process gets no card and no pick', async
   expect((await ui.find({ type: 'Text', text: /live/ }))?.text).toBe(
     '1 live · 0 waiting on you · 1 working',
   )
-  expect(await ui.find({ key: 'add-session' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the picker says so when nothing is left to add', async ($, on) => {
+  world(on)
+  await $.session.start(start)
+  const ui = await $.ui.mount(PANE)
+
+  await ui.press({ key: 'add-session' })
+  await ui.advance(0)
+
+  expect((await ui.find({ type: 'Text', text: /No other/ }))?.text).toBe(
+    'No other sessions to add',
+  )
+  await ui.unmount()
+})
+
+test('the picker shows why the list could not load', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  on('session.id', () => ({ value: 'uuid-self' }))
+  on('command.register', () => ({ value: { command: 'sessions' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('process.run', () => ran(JSON.stringify({ rows: [row({})] })))
+  on('mcp.call', () => reply('No such server', true))
+  await $.session.start(start)
+  const ui = await $.ui.mount(PANE)
+
+  await ui.press({ key: 'add-session' })
+  await ui.advance(0)
+
+  expect((await ui.find({ type: 'Text', text: /No such server/ }))?.text).toContain('No such server')
   await ui.unmount()
 })
 

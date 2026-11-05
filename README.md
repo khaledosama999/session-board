@@ -8,7 +8,8 @@ A Claude Code mod that shows every live Claude session on your machine in one pa
 - Blue means the session is waiting on you, green means it is working, amber means it is polling, gray means it is idle.
 - Click a card to expand it and see its current activity, plan step and your last prompt.
 - Send a message to a session from its card, or open the session in the app.
-- Press ✕ to stop showing a session. `+ Add session` brings one back, `Show all` brings back all of them.
+- Press ✕ to stop showing a session, and `Show all` to bring them all back.
+- `+ Add session` lists your other sessions. Picking a removed one brings its card back. Picking a stopped one opens it in the app, and its card appears once it is running.
 
 The pane opens when a session starts. Type `/sessions` to reopen it.
 

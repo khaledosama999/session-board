@@ -24,6 +24,13 @@ export type Board = { rows: SessionRow[]; error: string }
 /** The last message sent from a card; a new `sentCount` empties its field. */
 export type SendStatus = { text: string; isError: boolean; sentCount: number }
 
+/** The sessions the app knows of, running or not, for the picker. */
+export type Catalog = {
+  sessions: { id: string; title: string }[]
+  error: string
+  isLoaded: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'session-board': {
@@ -32,6 +39,7 @@ declare module 'claude-code' {
       hidden: Shaped<string[]>
       sends: Shaped<Record<string, SendStatus>>
       isPicking: Shaped<boolean>
+      catalog: Shaped<Catalog>
     }
   }
 }
