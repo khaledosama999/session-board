@@ -10,6 +10,7 @@ from queue import Empty, Queue
 from threading import Thread
 from time import monotonic
 
+from activity import Activity, snippet
 from desktop_status import DesktopStatus
 
 
@@ -86,7 +87,12 @@ def list_threads(app):
         "sourceKinds": ["cli", "vscode", "appServer", "unknown"],
     })
     return [
-        {key: thread.get(key) for key in ("id", "name", "preview", "cwd", "updatedAt")}
+        {
+            "id": thread["id"],
+            "name": snippet(thread.get("name") or thread.get("preview"), 100),
+            "cwd": thread.get("cwd"),
+            "updatedAt": thread.get("updatedAt"),
+        }
         for thread in result["data"]
     ]
 
@@ -94,6 +100,7 @@ def list_threads(app):
 def serve(port, desktop):
     page = Path(__file__).with_name("board.html").read_bytes()
     app = None
+    activity = Activity()
 
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -139,6 +146,8 @@ def serve(port, desktop):
                     desktop.update(rows)
                     for row in rows:
                         row["status"] = desktop.status(row["id"])
+                        row["question"] = desktop.question(row["id"])
+                    activity.populate(app, rows)
                 status, payload = 200, {
                     "threads": rows,
                     "desktop": "off" if desktop is None else "connected" if desktop.client else "unavailable",

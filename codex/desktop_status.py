@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
+from activity import snippet
+
 
 FOLLOW_LIMIT = 16
 MAX_FRAME = 32 * 1024 * 1024
@@ -121,9 +123,11 @@ class DesktopStatus:
         source = message.get("sourceClientId")
         change = params["change"]
         if change["type"] == "snapshot":
-            status = classify(change["conversationState"].get("threadRuntimeStatus"))
+            snapshot = change["conversationState"]
+            status = classify(snapshot.get("threadRuntimeStatus"))
+            question = request_question(snapshot.get("requests"))
         elif change["type"] == "patches" and thread_id in self.states:
-            owner, revision, status = self.states[thread_id]
+            owner, revision, status, question = self.states[thread_id]
             if source != owner:
                 return
             if revision != change.get("baseRevision"):
@@ -133,12 +137,14 @@ class DesktopStatus:
                 path = patch.get("path", [])
                 if path == ["threadRuntimeStatus"]:
                     status = classify(patch.get("value"))
-                elif path and path[0] == "threadRuntimeStatus":
+                elif path == ["requests"]:
+                    question = request_question(patch.get("value"))
+                elif path and path[0] in {"threadRuntimeStatus", "requests"}:
                     self.resnapshot(thread_id)
                     return
         else:
             return
-        self.states[thread_id] = (source, change["revision"], status)
+        self.states[thread_id] = (source, change["revision"], status, question)
 
     def resnapshot(self, thread_id):
         self.states.pop(thread_id, None)
@@ -172,3 +178,18 @@ class DesktopStatus:
     def status(self, thread_id):
         state = self.states.get(thread_id)
         return state[2] if state else None
+
+    def question(self, thread_id):
+        state = self.states.get(thread_id)
+        return state[3] if state and state[2] in {"input", "approval"} else ""
+
+
+def request_question(requests):
+    for request in reversed(requests or []):
+        params = request.get("params", {})
+        if request.get("method") == "item/tool/requestUserInput":
+            questions = params.get("questions") or []
+            return snippet(questions[0].get("question")) if questions else ""
+        if request.get("method", "").endswith("/requestApproval"):
+            return snippet(params.get("reason"))
+    return ""

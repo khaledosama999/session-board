@@ -10,9 +10,9 @@ On macOS with Python 3 and a recent Codex CLI, run this from a checkout:
 python3 codex/board.py --desktop-live
 ```
 
-Open the printed local URL. The board checks up to 16 recent local desktop chats every three seconds and puts approval and input requests above working and idle chats. Saved chats with no confirmed live status appear in a collapsed section. Use **Open in Codex** to jump to a chat. Press Ctrl+C to stop the board.
+Open the printed local URL. The board checks up to 16 recent local desktop chats every three seconds and puts sessions that need approval or input first. Expand a card to see a short excerpt of the latest reply and the last thing you asked. Use **Open session** to continue in Codex. **×** hides a card, **Show all** restores hidden cards, and **+ Add session** lets you reopen saved sessions or restore a hidden card. Press Ctrl+C to stop the board.
 
-The [Codex App Server](https://learn.chatgpt.com/docs/app-server) provides saved chat metadata. The optional `--desktop-live` flag subscribes to the local desktop app's versioned IPC stream. It may stop working after a desktop update. In that case, the board shows saved chats and marks live status unavailable. The board listens only on loopback, keeps only the status from desktop stream updates, and never submits messages or approval decisions.
+The [Codex App Server](https://learn.chatgpt.com/docs/app-server) provides recent chat history. The optional `--desktop-live` flag subscribes to the local desktop app's versioned IPC stream for runtime status. If the desktop stream is unavailable, saved sessions are still available under **+ Add session**. The board listens only on loopback. Follow-ups and approval decisions happen in the Codex chat.
 
 ## What it does (Claude Code)
 
