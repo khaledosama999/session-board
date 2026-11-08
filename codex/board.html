@@ -6,27 +6,63 @@
 <title>Session Board for Codex</title>
 <link rel="icon" href="data:,">
 <style>
-  :root { color-scheme: light dark; font: 1rem system-ui, sans-serif; }
-  body { max-width: 64rem; margin: 2.5rem auto; padding: 0 1rem; }
-  h1 { margin-bottom: .25rem; }
-  h2 { font-size: 1.1rem; overflow-wrap: anywhere; }
-  p { margin: .5rem 0; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: .75rem; }
-  details { border: 1px solid GrayText; border-radius: .6rem; padding: .85rem; min-width: 0; }
-  summary { cursor: pointer; overflow-wrap: anywhere; }
-  .preview { white-space: pre-wrap; overflow-wrap: anywhere; }
-  time { display: block; margin: .5rem 0; font-size: .8rem; }
+  :root { color-scheme: light dark; font: 14px/1.45 system-ui, sans-serif; }
+  body { max-width: 52rem; margin: 0 auto; padding: 0 1rem 2rem; }
+  header { position: sticky; top: 0; background: Canvas; padding: 1rem 0 .75rem; border-bottom: 1px solid GrayText; z-index: 1; }
+  h1 { font-size: 1.35rem; margin: 0 0 .35rem; }
+  h2 { font-size: .85rem; margin: 1.15rem 0 .45rem; }
+  p { margin: .25rem 0; }
+  .muted { color: GrayText; }
+  .card {
+    --accent: GrayText;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem .65rem;
+    padding: .65rem .8rem; margin: .4rem 0; border-radius: .5rem;
+    border: 1px solid color-mix(in srgb, var(--accent), transparent 45%);
+  }
+  .attention { --accent: light-dark(#1756ba, #84afff); }
+  .working { --accent: light-dark(#167449, #69d29b); }
+  .badge { color: var(--accent); font-size: .8rem; font-weight: 650; }
+  .badge::before { content: "●"; margin-right: .4rem; }
+  .title { margin: 0; font-size: .95rem; overflow-wrap: anywhere; }
+  .workspace { overflow-wrap: anywhere; }
+  .metadata, .preview { grid-column: 1 / -1; min-width: 0; font-size: .82rem; }
+  .preview p { white-space: pre-wrap; overflow-wrap: anywhere; }
+  a { align-self: start; grid-column: 2; grid-row: 1 / span 2; font-size: .82rem; }
+  summary { cursor: pointer; }
+  #saved { margin-top: 1rem; }
+  #saved > summary { font-weight: 650; }
 </style>
 </head>
 <body>
-<h1>Session Board for Codex</h1>
-<p id="notice" role="status">Loading chats…</p>
-<main id="board"></main>
+<header>
+  <h1>Session Board for Codex</h1>
+  <p id="notice" role="status">Loading chats…</p>
+  <p id="source" class="muted"></p>
+</header>
+<main>
+  <div id="live"></div>
+  <details id="saved">
+    <summary id="saved-count">Saved chats</summary>
+    <div id="history"></div>
+  </details>
+</main>
 <script>
-  const board = document.querySelector("#board");
   const notice = document.querySelector("#notice");
-  let lastSnapshot;
+  const source = document.querySelector("#source");
+  const live = document.querySelector("#live");
+  const history = document.querySelector("#history");
+  const savedCount = document.querySelector("#saved-count");
   const cards = new Map();
+  let lastSnapshot;
+
+  const states = {
+    approval: {label: "Needs approval", group: "attention"},
+    input: {label: "Waiting for you", group: "attention"},
+    error: {label: "Error", group: "attention"},
+    working: {label: "Working", group: "working"},
+    idle: {label: "Idle", group: "idle"},
+  };
+  const groups = {attention: "Needs you", working: "Working", idle: "Idle"};
 
   function make(tag, value, className) {
     const element = document.createElement(tag);
@@ -35,53 +71,65 @@
     return element;
   }
 
-  function render(threads) {
-    const groups = new Map();
-    for (const thread of threads) {
-      const project = thread.cwd || "No workspace";
-      if (!groups.has(project)) groups.set(project, []);
-      groups.get(project).push(thread);
+  function cardFor(row, state) {
+    let card = cards.get(row.id);
+    if (!card) {
+      const element = make("article");
+      const title = make("h3", "", "title");
+      const badge = make("span", "", "badge");
+      const metadata = make("p", "", "metadata muted");
+      const preview = make("details", "", "preview");
+      const previewText = make("p");
+      preview.append(make("summary", "Chat preview"), previewText);
+      const link = make("a", "Open in Codex");
+      link.href = "codex://threads/" + encodeURIComponent(row.id);
+      element.append(badge, title, link, metadata, preview);
+      card = {element, title, badge, metadata, preview, previewText};
+      cards.set(row.id, card);
     }
-    const focus = document.activeElement;
-    const sections = document.createDocumentFragment();
-    const currentIds = new Set();
-    for (const [project, rows] of groups) {
+    card.element.className = "card " + (state?.group ?? "saved");
+    card.title.textContent = row.name || row.preview?.split("\n", 1)[0].slice(0, 100) || "Untitled chat";
+    card.badge.textContent = state?.label ?? "Live status unavailable";
+    const workspace = row.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || "No workspace";
+    const date = row.updatedAt ? new Date(row.updatedAt * 1000).toLocaleString() : "";
+    card.metadata.textContent = date ? workspace + " · Updated " + date : workspace;
+    card.metadata.title = row.cwd || "";
+    card.preview.hidden = !row.preview;
+    card.previewText.textContent = row.preview ?? "";
+    return card.element;
+  }
+
+  function render({threads, desktop}) {
+    const sections = new Map(Object.entries(groups).map(([group, label]) => {
       const section = make("section");
-      section.append(make("h2", project));
-      const grid = make("div", "", "cards");
-      for (const row of rows) {
-        currentIds.add(row.id);
-        let card = cards.get(row.id);
-        if (!card) {
-          const details = make("details");
-          const title = make("strong");
-          const summary = make("summary");
-          const updated = make("time");
-          summary.append(title, updated);
-          const preview = make("p", "", "preview");
-          const link = make("a", "Open in Codex");
-          link.href = "codex://threads/" + encodeURIComponent(row.id);
-          details.append(summary, preview, link);
-          card = { details, title, preview, updated };
-          cards.set(row.id, card);
-        }
-        card.title.textContent = row.name || row.preview?.split("\n", 1)[0].slice(0, 100) || "Untitled chat";
-        card.preview.textContent = row.preview || "No preview available.";
-        if (row.updatedAt) {
-          const date = new Date(row.updatedAt * 1000);
-          card.updated.dateTime = date.toISOString();
-          card.updated.textContent = "Updated " + date.toLocaleString();
-        }
-        grid.append(card.details);
-      }
-      section.append(grid);
-      sections.append(section);
+      section.append(make("h2", label));
+      return [group, section];
+    }));
+    const saved = document.createDocumentFragment();
+    const counts = {attention: 0, working: 0, idle: 0, saved: 0};
+    const focus = document.activeElement;
+
+    for (const row of threads) {
+      const state = Object.hasOwn(states, row.status) ? states[row.status] : null;
+      counts[state?.group ?? "saved"]++;
+      (sections.get(state?.group) ?? saved).append(cardFor(row, state));
     }
-    board.replaceChildren(sections);
-    if (board.contains(focus)) focus.focus();
+    live.replaceChildren(...Array.from(sections).filter(([group]) => counts[group]).map(([, section]) => section));
+    history.replaceChildren(saved);
+    savedCount.textContent = "Saved chats (" + counts.saved + ")";
     for (const id of cards.keys()) {
-      if (!currentIds.has(id)) cards.delete(id);
+      if (!threads.some(row => row.id === id)) cards.delete(id);
     }
+    if (focus?.isConnected) focus.focus({preventScroll: true});
+
+    notice.textContent = desktop === "connected"
+      ? counts.attention + " need you · " + counts.working + " working · " + counts.idle + " idle"
+      : "Live status unavailable";
+    source.textContent = {
+      connected: "Live status for up to 16 recent local desktop chats.",
+      unavailable: "Could not reach the Codex desktop status connection. Saved chats are below.",
+      off: "Saved history only. Start with --desktop-live to show local desktop status.",
+    }[desktop] ?? "";
   }
 
   async function refresh() {
@@ -91,15 +139,14 @@
       const data = JSON.parse(snapshot);
       if (!response.ok) throw new Error(data.error || "Could not load chats.");
       if (snapshot !== lastSnapshot) {
-        render(data.threads);
+        render(data);
         lastSnapshot = snapshot;
       }
-      const count = data.threads.length;
-      const label = count === 1 ? "1 saved chat" : count + " saved chats";
-      if (notice.textContent !== label) notice.textContent = label;
     } catch (error) {
-      const label = "Refresh failed. " + error.message;
-      if (notice.textContent !== label) notice.textContent = label;
+      lastSnapshot = undefined;
+      live.replaceChildren();
+      notice.textContent = "Live status unavailable";
+      source.textContent = "Refresh failed. " + error.message;
     } finally {
       setTimeout(refresh, 3000);
     }

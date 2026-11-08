@@ -7,12 +7,12 @@ A Claude Code mod that shows live sessions on your machine, with a local browser
 On macOS with Python 3 and a recent Codex CLI, run this from a checkout:
 
 ```sh
-python3 codex/board.py
+python3 codex/board.py --desktop-live
 ```
 
-Open the printed local URL. The board refreshes every three seconds and groups up to 100 recent, unarchived chats by workspace. Expand a card for its preview and **Open in Codex** to jump to the chat in the desktop app. Press Ctrl+C to stop the board.
+Open the printed local URL. The board checks up to 16 recent local desktop chats every three seconds and puts approval and input requests above working and idle chats. Saved chats with no confirmed live status appear in a collapsed section. Use **Open in Codex** to jump to a chat. Press Ctrl+C to stop the board.
 
-The board uses the [Codex App Server](https://learn.chatgpt.com/docs/app-server) to read chat metadata. It lists saved chats and their last update time. Live desktop activity, approval alerts, and sending messages are outside this version. The board listens only on loopback.
+The [Codex App Server](https://learn.chatgpt.com/docs/app-server) provides saved chat metadata. The optional `--desktop-live` flag subscribes to the local desktop app's versioned IPC stream. It may stop working after a desktop update. In that case, the board shows saved chats and marks live status unavailable. The board listens only on loopback, keeps only the status from desktop stream updates, and never submits messages or approval decisions.
 
 ## What it does (Claude Code)
 

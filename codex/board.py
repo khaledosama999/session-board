@@ -10,6 +10,8 @@ from queue import Empty, Queue
 from threading import Thread
 from time import monotonic
 
+from desktop_status import DesktopStatus
+
 
 class AppServer:
     def __init__(self):
@@ -89,7 +91,7 @@ def list_threads(app):
     ]
 
 
-def serve():
+def serve(port, desktop):
     page = Path(__file__).with_name("board.html").read_bytes()
     app = None
 
@@ -133,13 +135,20 @@ def serve():
                     app = None
                 status, payload = 502, {"error": str(error)}
             else:
-                status, payload = 200, {"threads": rows}
+                if desktop is not None:
+                    desktop.update(rows)
+                    for row in rows:
+                        row["status"] = desktop.status(row["id"])
+                status, payload = 200, {
+                    "threads": rows,
+                    "desktop": "off" if desktop is None else "connected" if desktop.client else "unavailable",
+                }
             self.respond(status, "application/json", json.dumps(payload).encode("utf-8"))
 
         def log_message(self, *_args):
             pass
 
-    with HTTPServer(("127.0.0.1", 0), Handler) as server:
+    with HTTPServer(("127.0.0.1", port), Handler) as server:
         print(f"Open http://127.0.0.1:{server.server_port} in your browser.", flush=True)
         try:
             server.serve_forever()
@@ -148,11 +157,16 @@ def serve():
         finally:
             if app is not None:
                 app.close()
+            if desktop is not None:
+                desktop.close()
 
 
 def main():
-    argparse.ArgumentParser(description=__doc__).parse_args()
-    serve()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--desktop-live", action="store_true", help="read live status from the local desktop app")
+    parser.add_argument("--port", type=int, default=0, help="local browser port (default: choose a free port)")
+    args = parser.parse_args()
+    serve(args.port, DesktopStatus() if args.desktop_live else None)
 
 
 if __name__ == "__main__":
