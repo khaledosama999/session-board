@@ -11,6 +11,12 @@ const SESSION_SERVER = 'ccd_session_mgmt'
 const CATALOG_LIMIT = 100
 // The most a Select may hold; a longer list stops the whole pane drawing.
 const MAX_PICKER_OPTIONS = 64
+// Messages typed in a card wait here until the target session's own copy of
+// the mod picks them up and submits them as the person's words.
+const INBOX_DIR = '.claude/session-board'
+const ALIVE_EVERY_MS = 10_000
+// A target whose mod has not checked in for this long gets the app's message.
+const ALIVE_FOR_MS = 30_000
 const EMPTY: Board = { rows: [], error: '' }
 const board = atom({ plugin: 'session-board', key: 'board' } as const, EMPTY, {
   shape: 'board-2',
@@ -158,6 +164,50 @@ async function loadCatalog($: EngineInterface): Promise<void> {
   await update($, catalog, () => next)
 }
 
+const home = async ($: EngineInterface) => `${(await $.env.get('HOME')) ?? ''}/${INBOX_DIR}`
+const aliveFile = async ($: EngineInterface, sessionId: string) =>
+  `${await home($)}/alive/${sessionId}`
+const inboxOf = async ($: EngineInterface, sessionId: string) =>
+  `${await home($)}/inbox/${sessionId}`
+
+/** Marks this session as one whose mod picks up messages. */
+async function checkIn($: EngineInterface): Promise<void> {
+  await $.fs.write(await aliveFile($, await $.session.id()), String(await $.clock.now()))
+}
+
+/** Whether `sessionId` runs the mod and will pick up its inbox. */
+async function canPickUp($: EngineInterface, sessionId: string): Promise<boolean> {
+  if (!sessionId) return false
+  try {
+    const lastSeen = Number(await $.fs.read(await aliveFile($, sessionId)))
+
+    return (await $.clock.now()) - lastSeen < ALIVE_FOR_MS
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Submits this session's waiting messages as the person's own, oldest first.
+ * A rename claims each file, so two copies of the mod never both submit it.
+ */
+async function pickUp($: EngineInterface): Promise<void> {
+  const dir = await inboxOf($, await $.session.id())
+  const entries = await $.fs.list(dir).catch(() => [])
+  const waiting = entries
+    .filter(entry => entry.kind === 'file' && entry.name.endsWith('.txt'))
+    .map(entry => entry.name)
+    .sort()
+  for (const name of waiting) {
+    const claimed = `${dir}/${name}.claimed`
+    const moved = await $.process.run(['mv', `${dir}/${name}`, claimed])
+    if (moved.exitCode !== 0) continue
+    const text = await $.fs.read(claimed)
+    await $.process.run(['rm', '-f', claimed])
+    if (text.trim()) void $.prompt.submit({ text, asUser: true })
+  }
+}
+
 const openInApp = ($: EngineInterface, id: string) =>
   $.process.run(['open', `claude://claude.ai/epitaxy/${id}`])
 
@@ -172,6 +222,17 @@ async function sendMessage($: EngineInterface, row: SessionRow, text: string): P
       return { ...all, [id]: { ...next, sentCount: didSend ? sentCount + 1 : sentCount } }
     })
   await setStatus({ text: 'Sending…', isError: false }, false)
+  if (await canPickUp($, row.sessionId)) {
+    try {
+      const name = `${await $.clock.now()}-${Math.random().toString(36).slice(2, 8)}.txt`
+      await $.fs.write(`${await inboxOf($, row.sessionId)}/${name}`, text)
+      await setStatus({ text: 'Sent as you', isError: false }, true)
+    } catch (error) {
+      await setStatus({ text: `Not sent: ${String(error).slice(0, 200)}`, isError: true }, false)
+    }
+
+    return
+  }
   try {
     const result = await $.mcp.call(SESSION_SERVER, 'send_message', {
       session_id: row.hostId,
@@ -182,7 +243,11 @@ async function sendMessage($: EngineInterface, row: SessionRow, text: string): P
     if (result.isError || (delivery !== 'delivered' && delivery !== 'queued')) {
       await setStatus({ text: `Not sent: ${reply.slice(0, 200)}`, isError: true }, false)
     } else {
-      const label = delivery === 'delivered' ? 'Sent' : 'Queued until it finishes'
+      // Without the mod there, the app labels it as coming from this session.
+      const label =
+        delivery === 'delivered'
+          ? 'Sent, labeled from this session'
+          : 'Queued until it finishes, labeled from this session'
       await setStatus({ text: label, isError: false }, true)
     }
   } catch (error) {
@@ -215,6 +280,22 @@ export const register: Register = on => {
     }
     await tick()
     $.clock.every(POLL_MS, () => void tick())
+    let isPickingUp = false
+    const collect = async () => {
+      if (isPickingUp) return
+      isPickingUp = true
+      try {
+        await pickUp($)
+      } catch (error) {
+        $.ui.log(`session-board inbox: ${String(error).slice(0, 200)}`)
+      } finally {
+        isPickingUp = false
+      }
+    }
+    const beat = () => checkIn($).catch(() => undefined)
+    await beat()
+    $.clock.every(ALIVE_EVERY_MS, () => void beat())
+    $.clock.every(POLL_MS, () => void collect())
     void $.ui.open({ id: PANE, title: 'Sessions' })
 
     return next(e)

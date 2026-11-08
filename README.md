@@ -41,10 +41,10 @@ In the desktop app, where `/plugin` does not run: click + next to the prompt box
 
 - It shows sessions with a running process only. A session that has not been opened since the app restarted stays hidden until you open it.
 - Claude's thinking text is mostly empty in transcripts, so cards show the latest tool, plan step or message instead.
-- A message arrives labeled as coming from the session hosting the pane, not as typed by you. It cannot answer a permission prompt.
+- A message from a card arrives as your own words when the target session also runs this mod, so install it at user scope. Claude reads it as if you typed it, though the transcript still shows a small plugin label. If the target does not run the mod, the app delivers it labeled as coming from the session hosting the pane. Either way it cannot answer a permission prompt, and a busy session gets it once it is idle.
 
 ## How it works
 
-`bin/snapshot.py` reads `~/.claude/sessions/*.json` and the end of each session's transcript. It runs every 3 seconds, reads only, and keeps everything on your machine. `hooks/register.tsx` draws the pane and `hooks/card.tsx` draws each card.
+`bin/snapshot.py` reads `~/.claude/sessions/*.json` and the end of each session's transcript. It runs every 3 seconds, reads only, and keeps everything on your machine. Card messages wait as files in `~/.claude/session-board/inbox/<session id>/`, and each session running the mod checks its own inbox every 3 seconds, without using any tokens until a message arrives. Each session also notes it is running in `~/.claude/session-board/alive/` every 10 seconds, so cards know which way to send. `hooks/register.tsx` draws the pane and `hooks/card.tsx` draws each card.
 
 Run the tests with `claude plugin test .`.

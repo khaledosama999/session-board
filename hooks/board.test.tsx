@@ -53,11 +53,45 @@ type World = {
   sent?: unknown[]
   sessions?: object[]
   sendReply?: ReturnType<typeof reply>
+  files?: Map<string, string>
+  submitted?: unknown[]
 }
+
+const HOME = '/home/me'
+const BOARD_DIR = `${HOME}/.claude/session-board`
 
 function world(on: On, options: World = {}) {
   const { rows = [row({})], argvs = [], saved = {}, stored = {} } = options
-  mock.clock(on)
+  const files = options.files ?? new Map<string, string>()
+  const clock = mock.clock(on)
+  mock.env(on, { HOME })
+  on('fs.write', (_, e) => {
+    files.set(e.path, e.text)
+
+    return { value: undefined }
+  })
+  on('fs.read', (_, e) => {
+    const text = files.get(e.path)
+    if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
+
+    return { value: text }
+  })
+  on('fs.list', (_, e) => ({
+    value: [...files.keys()]
+      .filter(path => path.startsWith(`${e.path}/`) && !path.slice(e.path.length + 1).includes('/'))
+      .map(path => ({
+        name: path.slice(e.path.length + 1),
+        kind: 'file' as const,
+        size: 0,
+        mtimeMs: 0,
+        isLink: false,
+      })),
+  }))
+  on('prompt.submit', (_, e) => {
+    options.submitted?.push(e)
+
+    return { text: e.text }
+  })
   on('session.id', () => ({ value: 'uuid-self' }))
   on('store.get', (_, e) => ({ value: stored[e.key] }))
   on('store.set', (_, e) => {
@@ -70,6 +104,20 @@ function world(on: On, options: World = {}) {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('process.run', (_, e) => {
     argvs.push(e.argv)
+    const [command, from = '', to = ''] = e.argv as string[]
+    if (command === 'mv') {
+      const text = files.get(from)
+      if (text === undefined) return ran('', 1, 'No such file')
+      files.delete(from)
+      files.set(to, text)
+
+      return ran('')
+    }
+    if (command === 'rm') {
+      files.delete(e.argv[2] as string)
+
+      return ran('')
+    }
 
     return ran(JSON.stringify({ rows }))
   })
@@ -81,6 +129,8 @@ function world(on: On, options: World = {}) {
 
     return options.sendReply ?? reply('Done (delivery: delivered; message_id: m1)')
   })
+
+  return clock
 }
 
 const start = { cwd: '/', surface: 'desktop', isInteractive: true } as const
@@ -321,7 +371,7 @@ test('Open session opens that session in the app', async ($, on) => {
   expect(argvs).toContainEqual(['open', 'claude://claude.ai/epitaxy/local_one'])
 })
 
-test('a message goes to that session and the field empties', async ($, on) => {
+test('without the mod there, a message goes through the app and the field empties', async ($, on) => {
   const sent: unknown[] = []
   world(on, { sent })
   await $.session.start(start)
@@ -334,7 +384,9 @@ test('a message goes to that session and the field empties', async ($, on) => {
   expect(JSON.stringify(sent[0])).toContain('send_message')
   expect(JSON.stringify(sent[0])).toContain('local_one')
   expect(JSON.stringify(sent[0])).toContain('Ship it')
-  expect((await ui.find({ type: 'Text', text: /^Sent$/ }))?.text).toBe('Sent')
+  expect((await ui.find({ type: 'Text', text: /^Sent/ }))?.text).toBe(
+    'Sent, labeled from this session',
+  )
   expect(await ui.find({ key: 'message-local_one-0' })).toBeUndefined()
   expect(await ui.find({ key: 'message-local_one-1' })).toBeDefined()
   await ui.unmount()
@@ -348,7 +400,9 @@ test('a queued message says so', async ($, on) => {
   await ui.post({ type: 'toggle', id: 'local_one' }, CARD)
   await ui.input({ key: 'message-local_one-0', text: 'Next' })
 
-  expect((await ui.find({ type: 'Text', text: /Queued/ }))?.text).toBe('Queued until it finishes')
+  expect((await ui.find({ type: 'Text', text: /Queued/ }))?.text).toBe(
+    'Queued until it finishes, labeled from this session',
+  )
   await ui.unmount()
 })
 
@@ -404,4 +458,59 @@ test('a failed snapshot shows the error', async ($, on) => {
 
   expect((await ui.find({ type: 'Text' }))?.text).toBe('python3: not found')
   await ui.unmount()
+})
+
+test('with the mod there, a message goes to its inbox, not through the app', async ($, on) => {
+  const sent: unknown[] = []
+  const files = new Map<string, string>()
+  const clock = world(on, { sent, files })
+  files.set(`${BOARD_DIR}/alive/uuid-one`, String(clock.now()))
+  await $.session.start(start)
+  const ui = await $.ui.mount(PANE)
+
+  await ui.post({ type: 'toggle', id: 'local_one' }, CARD)
+  await ui.input({ key: 'message-local_one-0', text: 'Ship it' })
+
+  expect(sent).toHaveLength(0)
+  const waiting = [...files].filter(([path]) => path.startsWith(`${BOARD_DIR}/inbox/uuid-one/`))
+  expect(waiting).toHaveLength(1)
+  expect(waiting[0]?.[1]).toBe('Ship it')
+  expect((await ui.find({ type: 'Text', text: /^Sent/ }))?.text).toBe('Sent as you')
+  expect(await ui.find({ key: 'message-local_one-1' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a mod that stopped checking in gets the app message instead', async ($, on) => {
+  const sent: unknown[] = []
+  const files = new Map<string, string>()
+  const clock = world(on, { sent, files })
+  files.set(`${BOARD_DIR}/alive/uuid-one`, String(clock.now() - 60_000))
+  await $.session.start(start)
+  const ui = await $.ui.mount(PANE)
+
+  await ui.post({ type: 'toggle', id: 'local_one' }, CARD)
+  await ui.input({ key: 'message-local_one-0', text: 'Ship it' })
+
+  expect(sent).toHaveLength(1)
+  expect([...files.keys()].some(path => path.includes('/inbox/'))).toBe(false)
+  await ui.unmount()
+})
+
+test('a session checks in and submits its waiting messages as the person, once', async ($, on) => {
+  const submitted: unknown[] = []
+  const files = new Map<string, string>()
+  const clock = world(on, { submitted, files })
+  files.set(`${BOARD_DIR}/inbox/uuid-self/2-b.txt`, 'second')
+  files.set(`${BOARD_DIR}/inbox/uuid-self/1-a.txt`, 'first')
+  files.set(`${BOARD_DIR}/inbox/uuid-other/1-c.txt`, 'not mine')
+  await $.session.start(start)
+
+  expect(files.get(`${BOARD_DIR}/alive/uuid-self`)).toBe(String(clock.now()))
+  await clock.advance(3000)
+  await clock.advance(3000)
+
+  expect(submitted.map(e => (e as { text: string }).text)).toEqual(['first', 'second'])
+  expect(JSON.stringify(submitted[0])).toContain('"asUser":true')
+  expect([...files.keys()].filter(path => path.includes('/inbox/uuid-self/'))).toEqual([])
+  expect(files.get(`${BOARD_DIR}/inbox/uuid-other/1-c.txt`)).toBe('not mine')
 })
