@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session Board for Codex</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: light dark; font: 1rem system-ui, sans-serif; }
+  body { max-width: 64rem; margin: 2.5rem auto; padding: 0 1rem; }
+  h1 { margin-bottom: .25rem; }
+  h2 { font-size: 1.1rem; overflow-wrap: anywhere; }
+  p { margin: .5rem 0; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: .75rem; }
+  details { border: 1px solid GrayText; border-radius: .6rem; padding: .85rem; min-width: 0; }
+  summary { cursor: pointer; overflow-wrap: anywhere; }
+  .preview { white-space: pre-wrap; overflow-wrap: anywhere; }
+  time { display: block; margin: .5rem 0; font-size: .8rem; }
+</style>
+</head>
+<body>
+<h1>Session Board for Codex</h1>
+<p id="notice" role="status">Loading chats…</p>
+<main id="board"></main>
+<script>
+  const board = document.querySelector("#board");
+  const notice = document.querySelector("#notice");
+  let lastSnapshot;
+  const cards = new Map();
+
+  function make(tag, value, className) {
+    const element = document.createElement(tag);
+    if (value) element.textContent = value;
+    if (className) element.className = className;
+    return element;
+  }
+
+  function render(threads) {
+    const groups = new Map();
+    for (const thread of threads) {
+      const project = thread.cwd || "No workspace";
+      if (!groups.has(project)) groups.set(project, []);
+      groups.get(project).push(thread);
+    }
+    const focus = document.activeElement;
+    const sections = document.createDocumentFragment();
+    const currentIds = new Set();
+    for (const [project, rows] of groups) {
+      const section = make("section");
+      section.append(make("h2", project));
+      const grid = make("div", "", "cards");
+      for (const row of rows) {
+        currentIds.add(row.id);
+        let card = cards.get(row.id);
+        if (!card) {
+          const details = make("details");
+          const title = make("strong");
+          const summary = make("summary");
+          const updated = make("time");
+          summary.append(title, updated);
+          const preview = make("p", "", "preview");
+          const link = make("a", "Open in Codex");
+          link.href = "codex://threads/" + encodeURIComponent(row.id);
+          details.append(summary, preview, link);
+          card = { details, title, preview, updated };
+          cards.set(row.id, card);
+        }
+        card.title.textContent = row.name || row.preview?.split("\n", 1)[0].slice(0, 100) || "Untitled chat";
+        card.preview.textContent = row.preview || "No preview available.";
+        if (row.updatedAt) {
+          const date = new Date(row.updatedAt * 1000);
+          card.updated.dateTime = date.toISOString();
+          card.updated.textContent = "Updated " + date.toLocaleString();
+        }
+        grid.append(card.details);
+      }
+      section.append(grid);
+      sections.append(section);
+    }
+    board.replaceChildren(sections);
+    if (board.contains(focus)) focus.focus();
+    for (const id of cards.keys()) {
+      if (!currentIds.has(id)) cards.delete(id);
+    }
+  }
+
+  async function refresh() {
+    try {
+      const response = await fetch("/threads");
+      const snapshot = await response.text();
+      const data = JSON.parse(snapshot);
+      if (!response.ok) throw new Error(data.error || "Could not load chats.");
+      if (snapshot !== lastSnapshot) {
+        render(data.threads);
+        lastSnapshot = snapshot;
+      }
+      const count = data.threads.length;
+      const label = count === 1 ? "1 saved chat" : count + " saved chats";
+      if (notice.textContent !== label) notice.textContent = label;
+    } catch (error) {
+      const label = "Refresh failed. " + error.message;
+      if (notice.textContent !== label) notice.textContent = label;
+    } finally {
+      setTimeout(refresh, 3000);
+    }
+  }
+  refresh();
+</script>
+</body>
+</html>
