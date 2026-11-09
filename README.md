@@ -1,8 +1,20 @@
 # Session Board
 
-A Claude Code mod that shows every live Claude session on your machine in one pane, so you can see which ones need you without jumping between them.
+A Claude Code mod that shows live sessions on your machine, with a local browser companion for Codex.
 
-## What it does
+## Codex
+
+On macOS with Python 3 and a recent Codex CLI, run this from a checkout:
+
+```sh
+python3 codex/board.py --desktop-live
+```
+
+Open the printed local URL. The board checks up to 16 recent local desktop chats every three seconds and puts sessions that need approval or input first. Expand a card to see a short excerpt of the latest reply and the last thing you asked. Use **Open session** to continue in Codex. **×** hides a card, **Show all** restores hidden cards, and **+ Add session** lets you reopen saved sessions or restore a hidden card. Press Ctrl+C to stop the board.
+
+The [Codex App Server](https://learn.chatgpt.com/docs/app-server) provides recent chat history. The optional `--desktop-live` flag subscribes to the local desktop app's versioned IPC stream for runtime status. If the desktop stream is unavailable, saved sessions are still available under **+ Add session**. The board listens only on loopback. Follow-ups and approval decisions happen in the Codex chat.
+
+## What it does (Claude Code)
 
 - Lists each live session as a card with an animated status dot.
 - Blue means the session is waiting on you, green means it is working, amber means it is polling, gray means it is idle.

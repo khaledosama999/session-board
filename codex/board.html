@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session Board for Codex</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: light dark; font: 14px/1.45 system-ui, sans-serif; }
+  body { max-width: 48rem; margin: 0 auto; padding: .85rem 1rem 2rem; }
+  header { margin-bottom: .65rem; }
+  h1 { margin: 0 0 .3rem; font-size: 1rem; }
+  p { margin: .25rem 0; }
+  .muted { color: GrayText; }
+  button, .button, select {
+    font: inherit; color: inherit; border: 1px solid transparent; border-radius: .45rem;
+    background: ButtonFace; padding: .25rem .6rem;
+  }
+  button, .button { cursor: pointer; }
+  .button { display: inline-block; text-decoration: none; margin-top: .45rem; }
+  button:hover, .button:hover { border-color: GrayText; }
+  #picker { display: inline-block; margin-top: .35rem; }
+  #picker > summary { list-style: none; }
+  #picker select { display: block; max-width: 100%; margin-top: .4rem; }
+  .card {
+    --accent: GrayText;
+    position: relative; margin: .45rem 0; padding: .55rem .8rem;
+    border: 1px solid var(--accent); border-radius: .7rem;
+  }
+  .attention { --accent: light-dark(#1859bd, #8bb4ff); }
+  .working { --accent: light-dark(#167449, #70ce98); }
+  .card summary { padding-right: 1.6rem; overflow-wrap: anywhere; font-weight: 650; }
+  summary { cursor: pointer; }
+  .dot { color: var(--accent); margin-right: .35rem; }
+  .status { display: block; color: var(--accent); font-size: .88rem; font-weight: 400; }
+  .details { overflow-wrap: anywhere; }
+  .hide {
+    position: absolute; top: .35rem; right: .45rem; padding: .15rem .4rem;
+    background: transparent; font-size: 1rem; line-height: 1;
+  }
+  #hidden-controls { margin-top: .55rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sessions</h1>
+  <p id="notice" role="status" class="muted">Loading sessions…</p>
+  <p id="source" class="muted" hidden></p>
+  <details id="picker">
+    <summary class="button">+ Add session</summary>
+    <select id="catalog" aria-label="Choose a session">
+      <option value="">Choose a session…</option>
+    </select>
+  </details>
+</header>
+<main id="live"></main>
+<p id="hidden-controls" hidden><span id="hidden-count" class="muted"></span> · <button id="show-all" type="button">Show all</button></p>
+<script>
+  const notice = document.querySelector("#notice");
+  const source = document.querySelector("#source");
+  const live = document.querySelector("#live");
+  const picker = document.querySelector("#picker");
+  const catalog = document.querySelector("#catalog");
+  const hiddenControls = document.querySelector("#hidden-controls");
+  const hiddenCount = document.querySelector("#hidden-count");
+  const showAll = document.querySelector("#show-all");
+  const cards = new Map();
+  const hidden = new Set(JSON.parse(localStorage.getItem("hidden-sessions") || "[]"));
+  let data;
+  let lastSnapshot;
+  let lastCatalog;
+
+  const states = {
+    approval: {label: "Needs approval", style: "attention", rank: 0},
+    input: {label: "Waiting for you", style: "attention", rank: 0},
+    error: {label: "Error", style: "attention", rank: 1},
+    working: {label: "Working", style: "working", rank: 2},
+    idle: {label: "Idle", style: "idle", rank: 3},
+  };
+
+  function make(tag, value, className) {
+    const element = document.createElement(tag);
+    if (value) element.textContent = value;
+    if (className) element.className = className;
+    return element;
+  }
+
+  function detail(label) {
+    const line = make("p");
+    const value = make("span");
+    line.append(make("span", label + ": ", "muted"), value);
+    return {line, value};
+  }
+
+  function setDetail(field, value) {
+    field.line.hidden = !value;
+    field.value.textContent = value || "";
+  }
+
+  function chatUrl(id) {
+    return "codex://threads/" + encodeURIComponent(id);
+  }
+
+  function setHidden(id, hide) {
+    if (hide) hidden.add(id);
+    else hidden.delete(id);
+    saveHidden();
+  }
+
+  function saveHidden() {
+    localStorage.setItem("hidden-sessions", JSON.stringify([...hidden]));
+    render();
+  }
+
+  function cardFor(row) {
+    const state = states[row.status];
+    let card = cards.get(row.id);
+    if (!card) {
+      const element = make("article");
+      const disclosure = make("details");
+      disclosure.open = true;
+      const title = make("span");
+      const summary = make("summary");
+      const dot = make("span", "●", "dot");
+      dot.setAttribute("aria-hidden", "true");
+      const status = make("span", "", "status");
+      summary.append(dot, title, status);
+      const details = make("div", "", "details");
+      const question = detail("Question");
+      const now = detail("Now");
+      const last = detail("Last");
+      const asked = detail("You asked");
+      const link = make("a", "Open session", "button");
+      link.href = chatUrl(row.id);
+      details.append(question.line, now.line, last.line, asked.line, link);
+      disclosure.append(summary, details);
+      const hide = make("button", "×", "hide");
+      hide.type = "button";
+      hide.addEventListener("click", () => setHidden(row.id, true));
+      element.append(disclosure, hide);
+      card = {element, title, status, hide, question, now, last, asked};
+      cards.set(row.id, card);
+    }
+    card.element.className = "card " + state.style;
+    card.title.textContent = row.name || "Untitled session";
+    card.title.title = row.cwd || "";
+    card.hide.setAttribute("aria-label", "Hide " + card.title.textContent);
+    card.label = state.label;
+    card.activityAt = row.activityAt || row.updatedAt;
+    setDetail(card.question, row.question);
+    setDetail(card.now, row.now);
+    setDetail(card.last, row.last);
+    setDetail(card.asked, row.asked);
+    return card.element;
+  }
+
+  function updateAges() {
+    const now = Date.now() / 1000;
+    for (const card of cards.values()) {
+      const elapsed = Math.max(0, Math.floor(now - card.activityAt));
+      const age = elapsed < 60 ? elapsed + "s" : elapsed < 3600 ? Math.floor(elapsed / 60) + "m"
+        : elapsed < 86400 ? Math.floor(elapsed / 3600) + "h" : Math.floor(elapsed / 86400) + "d";
+      const label = card.label + (card.activityAt ? " · " + age : "");
+      if (card.status.textContent !== label) card.status.textContent = label;
+    }
+  }
+
+  function render() {
+    const {threads, desktop} = data;
+    const isLive = row => Object.hasOwn(states, row.status);
+    const visible = threads.filter(row => isLive(row) && !hidden.has(row.id));
+    visible.sort((a, b) => states[a.status].rank - states[b.status].rank);
+    const focus = document.activeElement;
+    const keep = new Set(threads.filter(isLive).map(row => row.id));
+    live.replaceChildren(...visible.map(cardFor));
+    if (focus?.isConnected) focus.focus({preventScroll: true});
+    for (const id of cards.keys()) {
+      if (!keep.has(id)) cards.delete(id);
+    }
+    updateAges();
+
+    const waiting = visible.filter(row => row.status === "approval" || row.status === "input").length;
+    const working = visible.filter(row => row.status === "working").length;
+    const summary = desktop === "connected"
+      ? visible.length + " live · " + waiting + " waiting on you · " + working + " working"
+      : "Live status unavailable";
+    if (notice.textContent !== summary) notice.textContent = summary;
+    source.hidden = desktop === "connected";
+    source.textContent = desktop === "off"
+      ? "Start with --desktop-live to show live sessions."
+      : "Could not reach Codex desktop. Saved sessions are available under Add session.";
+    const hiddenRows = threads.filter(row => hidden.has(row.id));
+    hiddenControls.hidden = !hiddenRows.length;
+    hiddenCount.textContent = hiddenRows.length + " hidden";
+
+    const choices = [
+      ["Hidden sessions", hiddenRows],
+      ["Saved sessions", threads.filter(row => !isLive(row) && !hidden.has(row.id))],
+    ];
+    const signature = JSON.stringify(choices.map(([label, rows]) => [label, rows.map(({id, name}) => [id, name])]));
+    if (signature === lastCatalog) return;
+    lastCatalog = signature;
+    catalog.replaceChildren(new Option("Choose a session…", ""));
+    for (const [label, rows] of choices) {
+      if (!rows.length) continue;
+      const group = make("optgroup");
+      group.label = label;
+      group.append(...rows.map(row => new Option(row.name || "Untitled session", row.id)));
+      catalog.append(group);
+    }
+    catalog.disabled = catalog.options.length === 1;
+  }
+
+  catalog.addEventListener("change", () => {
+    const id = catalog.value;
+    if (!id) return;
+    const row = data.threads.find(row => row.id === id);
+    picker.open = false;
+    catalog.value = "";
+    setHidden(id, false);
+    if (row && !Object.hasOwn(states, row.status)) location.href = chatUrl(id);
+  });
+
+  showAll.addEventListener("click", () => {
+    hidden.clear();
+    saveHidden();
+  });
+
+  async function refresh() {
+    try {
+      const response = await fetch("/threads");
+      const snapshot = await response.text();
+      const next = JSON.parse(snapshot);
+      if (!response.ok) throw new Error(next.error || "Could not load sessions.");
+      if (snapshot !== lastSnapshot) {
+        data = next;
+        render();
+        lastSnapshot = snapshot;
+      } else {
+        updateAges();
+      }
+    } catch (error) {
+      lastSnapshot = undefined;
+      if (data) {
+        data = {desktop: "unavailable", threads: data.threads.map(row => ({...row, status: null}))};
+        render();
+      }
+      notice.textContent = "Live status unavailable";
+      source.hidden = false;
+      source.textContent = "Refresh failed. " + error.message;
+    } finally {
+      setTimeout(refresh, 3000);
+    }
+  }
+  refresh();
+</script>
+</body>
+</html>
